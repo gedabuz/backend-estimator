@@ -9,8 +9,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Tempat penampungan sementara di server Render
-const upload = multer({ dest: '/tmp/' });
+// ==========================================
+// PERBAIKAN 1: Mencegah Nama File Acak
+// ==========================================
+const storage = multer.diskStorage({
+    destination: '/tmp/',
+    filename: (req, file, cb) => {
+        // Menggabungkan waktu (agar tidak bentrok) dengan nama asli file beserta ekstensinya
+        cb(null, Date.now() + '_' + file.originalname.replace(/\s+/g, '_'));
+    }
+});
+const upload = multer({ storage: storage });
 
 const API_ID = parseInt(process.env.API_ID);
 const API_HASH = process.env.API_HASH;
@@ -33,17 +42,25 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         const { project, category, user } = req.body;
         const file = req.file;
 
+        // ==========================================
+        // PERBAIKAN 2: Memaksa Telegram Menyimpan Nama Asli
+        // ==========================================
         const result = await client.sendFile(CHANNEL_ID, {
             file: file.path,
             caption: `Proyek: ${project} | Kategori: ${category} | User: ${user}`,
-            forceDocument: true
+            forceDocument: true,
+            attributes: [
+                new Api.DocumentAttributeFilename({
+                    fileName: file.originalname, // Kunci utama: Beri tahu Telegram nama aslinya
+                }),
+            ],
         });
 
         fs.unlinkSync(file.path);
 
         const newRecord = {
             id: result.id, 
-            name: file.originalname,
+            name: file.originalname, // Menampilkan nama asli beserta ekstensi di tabel Web
             project, category, user,
             date: new Date().toISOString().split('T')[0]
         };
@@ -53,6 +70,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     } catch (error) {
         if (req.file) fs.unlinkSync(req.file.path); 
+        console.error("Error Upload:", error);
         res.status(500).json({ status: 'error', message: 'Gagal mengunggah file' });
     }
 });
@@ -75,7 +93,11 @@ app.get('/download/:messageId', async (req, res) => {
             if (nameAttr) fileName = nameAttr.fileName;
         }
 
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        // ==========================================
+        // PERBAIKAN 3: Header HTTP Anti-Gagal untuk Nama File Berspasi
+        // ==========================================
+        const encodedFileName = encodeURIComponent(fileName);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodedFileName}`);
         res.setHeader('Content-Type', 'application/octet-stream');
         if (document.size) res.setHeader('Content-Length', document.size.toString());
 
@@ -84,6 +106,7 @@ app.get('/download/:messageId', async (req, res) => {
         }
         res.end();
     } catch (error) {
+        console.error("Error Download:", error);
         res.status(500).send("Gagal streaming data");
     }
 });
