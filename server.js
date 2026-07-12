@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const { Api, TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
@@ -25,92 +26,65 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 const stringSession = new StringSession(""); 
 const client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
 
+// ==========================================
+// PENGATURAN DATABASE PERMANEN (RAILWAY VOLUME)
+// ==========================================
+// Mendeteksi apakah berjalan di Railway (/app/data) atau di laptop lokal
+const DATA_DIR = process.env.RAILWAY_ENVIRONMENT ? '/app/data' : path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const DB_FILE = path.join(DATA_DIR, 'database.json');
+
+// Database Default (Akan ditimpa jika file database.json ditemukan)
 let dbFiles = []; 
+let dbUsers = [
+    { username: 'rahmatullah', password: 'owner123', role: 'owner', name: 'Rahmatullah (Owner)' }
+];
 let activeSessions = {}; 
 
-// ==========================================
-// DAFTAR USER PERMANEN
-// Tambahkan anggota tim Anda secara manual di sini agar tidak hilang saat restart
-// ==========================================
-let dbUsers = [
-    { username: 'rahmat', password: 'akuplg88', role: 'creator', name: 'Rahmat (Creator)' },
-    { username: 'lukman', password: 'agentA1', role: 'leader etimate', name: 'Pak Lukman' },
-    { username: 'Zaenal', password: 'agent1', role: 'estimate', name: 'Mas Zaenal' },
-    { username: 'novita', password: 'agent2', role: 'admin', name: 'Mbak Novita' },
-    { username: 'puji', password: 'agent3', role: 'estimate', name: 'Mbak Puji' }
-    // Contoh menambah tim:
-    // { username: 'budi', password: 'budi123', role: 'team', name: 'Budi Santoso' },
-];
-
-// ==========================================
-// FUNGSI SINKRONISASI DATABASE DARI TELEGRAM
-// ==========================================
-async function syncDataFromTelegram() {
-    console.log("🔄 Memulai sinkronisasi database dari Telegram...");
-    try {
-        dbFiles = []; // Kosongkan memori sementara
-        
-        // Menarik 500 pesan/file terbaru dari channel (Bisa dinaikkan jika file sudah ribuan)
-        const messages = await client.getMessages(CHANNEL_ID, { limit: 500 });
-        
-        for (const message of messages) {
-            // Pastikan pesan tersebut adalah dokumen/file
-            if (message.media && message.media.document) {
-                const caption = message.message || "";
-                
-                // Fungsi cerdas membaca pola teks Caption
-                const getMatch = (str, regex) => {
-                    const match = str.match(regex);
-                    return match ? match[1].trim() : '-';
-                };
-                
-                const project = getMatch(caption, /Proyek:\s*(.+)/);
-                const category = getMatch(caption, /Kategori:\s*(.+)/);
-                const user = getMatch(caption, /Oleh:\s*(.+)/);
-                // Regex [\s\S]+ mengambil seluruh sisa teks hingga ke bawah
-                const keterangan = getMatch(caption, /Keterangan:\s*([\s\S]+)/); 
-                
-                // Mengambil nama file asli
-                let fileName = "Dokumen_Estimator";
-                if (message.media.document.attributes) {
-                    const nameAttr = message.media.document.attributes.find(attr => attr.className === 'DocumentAttributeFilename');
-                    if (nameAttr) fileName = nameAttr.fileName;
-                }
-                
-                // Mengambil tanggal file diupload dari server Telegram
-                const dateObj = new Date(message.date * 1000); // Convert Unix to JS Date
-                const dateStr = dateObj.toISOString().split('T')[0];
-
-                // Memasukkan kembali ke array database
-                dbFiles.push({
-                    id: message.id, 
-                    name: fileName,
-                    project: project !== '-' ? project : 'Tidak Diketahui',
-                    category: category !== '-' ? category : 'Tidak Diketahui',
-                    user: user !== '-' ? user : 'Anonim',
-                    keterangan: keterangan !== '-' ? keterangan : '-',
-                    date: dateStr
-                });
-            }
+// Fungsi untuk memuat data dari Hardisk Permanen saat server baru menyala
+function loadDatabase() {
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const rawData = fs.readFileSync(DB_FILE, 'utf8');
+            const parsed = JSON.parse(rawData);
+            dbFiles = parsed.files || [];
+            dbUsers = parsed.users || dbUsers;
+            console.log(`✅ Database dimuat: ${dbFiles.length} File & ${dbUsers.length} User.`);
+        } catch (err) {
+            console.error("Gagal membaca database:", err);
         }
-        console.log(`✅ Sinkronisasi Selesai! Berhasil memulihkan ${dbFiles.length} file dari Telegram.`);
-    } catch (error) {
-        console.error("❌ Gagal melakukan sinkronisasi:", error);
+    } else {
+        console.log("Database baru dibuat.");
+        saveDatabase();
     }
 }
 
+// Fungsi untuk menyimpan data ke Hardisk Permanen
+function saveDatabase() {
+    try {
+        fs.writeFileSync(DB_FILE, JSON.stringify({ files: dbFiles, users: dbUsers }, null, 2));
+    } catch (err) {
+        console.error("Gagal menyimpan database:", err);
+    }
+}
+
+// Muat database di awal
+loadDatabase();
+
 // ==========================================
-// MENYALAKAN MESIN & MENARIK DATA
+// MENYALAKAN MESIN TELEGRAM
 // ==========================================
 async function startMTProto() {
     await client.start({ botAuthToken: BOT_TOKEN });
-    console.log("🚀 Mesin MTProto Stream berhasil terhubung!");
-    
-    // Panggil fungsi sinkronisasi otomatis setiap kali server baru menyala!
-    await syncDataFromTelegram();
+    console.log("🚀 Mesin MTProto Stream berhasil terhubung ke Telegram!");
 }
 startMTProto();
 
+// ==========================================
+// ENDPOINT: AUTENTIKASI & USER
+// ==========================================
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
     const user = dbUsers.find(u => u.username === username && u.password === password);
@@ -130,6 +104,7 @@ app.post('/create-user', (req, res) => {
     if (dbUsers.find(u => u.username === newUsername)) return res.status(400).json({ status: 'error', message: 'Username sudah dipakai.' });
     
     dbUsers.push({ username: newUsername, password: newPassword, role: 'team', name: newName });
+    saveDatabase(); // Simpan permanen!
     res.json({ status: 'success', message: `Akun untuk ${newName} berhasil dibuat!` });
 });
 
@@ -140,6 +115,9 @@ app.post('/get-users', (req, res) => {
     res.json(safeUsers);
 });
 
+// ==========================================
+// ENDPOINT: UPLOAD & DOWNLOAD
+// ==========================================
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         const { project, category, user, keterangan, token } = req.body;
@@ -150,7 +128,6 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             return res.status(401).json({ status: 'error', message: 'Sesi login tidak valid, harap login ulang.' });
         }
 
-        // Format Teks Caption Ini SANGAT PENTING untuk dibaca ulang oleh fungsi Sync saat server restart
         const result = await client.sendFile(CHANNEL_ID, {
             file: file.path,
             caption: `Proyek: ${project}\nKategori: ${category}\nOleh: ${user}\nKeterangan: ${keterangan || '-'}`,
@@ -169,6 +146,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         };
 
         dbFiles.unshift(newRecord);
+        saveDatabase(); // Simpan permanen!
         res.json({ status: 'success', data: newRecord });
 
     } catch (error) {
