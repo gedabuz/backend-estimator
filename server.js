@@ -39,7 +39,7 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 // Database Default (Akan ditimpa jika file database.json ditemukan)
 let dbFiles = []; 
 let dbUsers = [
-    { username: 'rahmatullah', password: 'owner123', role: 'owner', name: 'Rahmatullah (Owner)' }
+    { username: 'gedabuz', password: 'akuplg88', role: 'creator', name: 'Rahmatullah (Creator)' }
 ];
 let activeSessions = {}; 
 
