@@ -26,15 +26,14 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 const stringSession = new StringSession(""); 
 const client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
 
-// DATABASE PERMANEN
+// DATABASE PERMANEN (RAILWAY VOLUME)
 const DATA_DIR = process.env.RAILWAY_ENVIRONMENT ? '/app/data' : path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let dbFiles = []; 
-// UPDATE 1: USERNAME GEDABU DAN ROLE CREATOR
 let dbUsers = [
-    { username: 'gedabuz', password: 'akuplg88', role: 'Admin', name: 'Rahmatullah (Admin)' }
+    { username: 'gedabu', password: 'owner123', role: 'admin', name: 'Gedabu (Admin)' }
 ];
 let activeSessions = {}; 
 
@@ -44,7 +43,19 @@ function loadDatabase() {
             const rawData = fs.readFileSync(DB_FILE, 'utf8');
             const parsed = JSON.parse(rawData);
             dbFiles = parsed.files || [];
-            dbUsers = parsed.users || dbUsers;
+            
+            let loadedUsers = parsed.users || [];
+            loadedUsers = loadedUsers.map(u => {
+                if (u.role === 'owner' || u.role === 'creator') u.role = 'admin';
+                return u;
+            });
+            
+            if (!loadedUsers.find(u => u.role === 'admin')) {
+                loadedUsers.push({ username: 'gedabu', password: 'owner123', role: 'admin', name: 'Gedabu (Admin)' });
+            }
+            
+            dbUsers = loadedUsers;
+            saveDatabase();
         } catch (err) { console.error("Gagal membaca DB:", err); }
     } else { saveDatabase(); }
 }
@@ -68,14 +79,14 @@ app.post('/login', (req, res) => {
     if (user) {
         const token = Date.now().toString() + Math.random().toString(36).substring(2);
         activeSessions[token] = user;
-        res.json({ status: 'success', token, role: user.role, name: user.name });
+        res.json({ status: 'success', token, role: user.role, name: user.name, username: user.username });
     } else { res.status(401).json({ status: 'error', message: 'Username atau Password salah!' }); }
 });
 
 app.post('/create-user', (req, res) => {
     const { token, newUsername, newPassword, newName } = req.body;
     const session = activeSessions[token];
-    if (!session || session.role !== 'creator') return res.status(403).json({ status: 'error', message: 'Akses ditolak!' });
+    if (!session || session.role !== 'admin') return res.status(403).json({ status: 'error', message: 'Akses ditolak!' });
     if (dbUsers.find(u => u.username === newUsername)) return res.status(400).json({ status: 'error', message: 'Username terpakai.' });
     
     dbUsers.push({ username: newUsername, password: newPassword, role: 'team', name: newName });
@@ -85,8 +96,44 @@ app.post('/create-user', (req, res) => {
 
 app.post('/get-users', (req, res) => {
     const { token } = req.body;
-    if (!activeSessions[token] || activeSessions[token].role !== 'creator') return res.status(403).send("Ditolak");
+    if (!activeSessions[token] || activeSessions[token].role !== 'admin') return res.status(403).send("Ditolak");
     res.json(dbUsers.map(u => ({ username: u.username, name: u.name, role: u.role })));
+});
+
+// --- FITUR BARU: ENDPOINT UPDATE PROFIL & PASSWORD ---
+app.post('/update-profile', (req, res) => {
+    const { token, newUsername, newName, newPassword } = req.body;
+    const session = activeSessions[token];
+    
+    if (!session) return res.status(401).json({ status: 'error', message: 'Sesi tidak valid.' });
+
+    // Mencari index user yang sedang login di database
+    const userIndex = dbUsers.findIndex(u => u.username === session.username);
+    if (userIndex === -1) return res.status(404).json({ status: 'error', message: 'User tidak ditemukan.' });
+
+    // Validasi duplikasi username (jika username diubah)
+    if (newUsername !== session.username && dbUsers.find(u => u.username === newUsername)) {
+        return res.status(400).json({ status: 'error', message: 'Username baru sudah digunakan oleh orang lain.' });
+    }
+
+    // Update data di database memori
+    dbUsers[userIndex].username = newUsername;
+    dbUsers[userIndex].name = newName;
+    if (newPassword && newPassword.trim() !== "") {
+        dbUsers[userIndex].password = newPassword;
+    }
+
+    // Sinkronisasi data sesi aktif saat ini
+    activeSessions[token] = dbUsers[userIndex];
+    
+    saveDatabase(); // Simpan permanen ke volume Railway!
+    
+    res.json({ 
+        status: 'success', 
+        message: 'Profil berhasil diperbarui!', 
+        name: dbUsers[userIndex].name, 
+        username: dbUsers[userIndex].username 
+    });
 });
 
 // --- ENDPOINT UPLOAD & DOWNLOAD ---
@@ -137,7 +184,6 @@ app.get('/download/:messageId', async (req, res) => {
     } catch (error) { res.status(500).send("Gagal streaming data"); }
 });
 
-// --- UPDATE 2: ENDPOINT EDIT DATA ---
 app.put('/files/:id', async (req, res) => {
     try {
         const { token, project, category, keterangan } = req.body;
@@ -149,18 +195,15 @@ app.put('/files/:id', async (req, res) => {
         if (fileIndex === -1) return res.status(404).json({ status: 'error', message: 'File tidak ditemukan.' });
 
         const file = dbFiles[fileIndex];
-        // Hanya Creator atau Pengupload asli yang boleh edit
-        if (session.role !== 'creator' && session.name !== file.user) {
-            return res.status(403).json({ status: 'error', message: 'Hanya uploader asli atau Creator yang bisa mengedit file ini.' });
+        if (session.role !== 'admin' && session.name !== file.user) {
+            return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
         }
 
         try {
-            // Update caption di Telegram
             const newCaption = `Proyek: ${project}\nKategori: ${category}\nOleh: ${file.user}\nKeterangan: ${keterangan || '-'}`;
             await client.editMessage(CHANNEL_ID, { message: id, text: newCaption });
-        } catch (tgError) { console.warn("Caption telegram tidak bisa diedit, lanjut update lokal."); }
+        } catch (tgError) { console.warn("Caption telegram tidak bisa diedit."); }
 
-        // Update Lokal
         dbFiles[fileIndex].project = project;
         dbFiles[fileIndex].category = category;
         dbFiles[fileIndex].keterangan = keterangan || '-';
@@ -170,7 +213,6 @@ app.put('/files/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ status: 'error', message: 'Gagal update data.' }); }
 });
 
-// --- UPDATE 2: ENDPOINT HAPUS DATA ---
 app.delete('/files/:id', async (req, res) => {
     try {
         const { token } = req.body;
@@ -182,15 +224,11 @@ app.delete('/files/:id', async (req, res) => {
         if (fileIndex === -1) return res.status(404).json({ status: 'error', message: 'File tidak ditemukan.' });
 
         const file = dbFiles[fileIndex];
-        // Hanya Creator atau Pengupload asli yang boleh hapus
-        if (session.role !== 'creator' && session.name !== file.user) {
-            return res.status(403).json({ status: 'error', message: 'Hanya uploader asli atau Creator yang bisa menghapus file ini.' });
+        if (session.role !== 'admin' && session.name !== file.user) {
+            return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
         }
 
-        // Hapus fisik dari Telegram
         await client.deleteMessages(CHANNEL_ID, [id], { revoke: true });
-
-        // Hapus lokal
         dbFiles.splice(fileIndex, 1);
         saveDatabase();
 
