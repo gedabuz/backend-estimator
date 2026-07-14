@@ -33,7 +33,7 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let dbFiles = []; 
 let dbUsers = [
-    { username: 'gedabu', password: 'owner123', role: 'admin', name: 'Gedabu (Admin)' }
+    { username: 'gedabuz', password: 'akuplg88', role: 'admin', name: 'Rahmatullah (Admin)' }
 ];
 let activeSessions = {}; 
 
@@ -51,7 +51,7 @@ function loadDatabase() {
             });
             
             if (!loadedUsers.find(u => u.role === 'admin')) {
-                loadedUsers.push({ username: 'gedabu', password: 'owner123', role: 'admin', name: 'Gedabu (Admin)' });
+                loadedUsers.push({ username: 'gedabuz', password: 'akuplg88', role: 'admin', name: 'Rahmatullah (Admin)' });
             }
             
             dbUsers = loadedUsers;
