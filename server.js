@@ -100,40 +100,53 @@ app.post('/get-users', (req, res) => {
     res.json(dbUsers.map(u => ({ username: u.username, name: u.name, role: u.role })));
 });
 
-// --- FITUR BARU: ENDPOINT UPDATE PROFIL & PASSWORD ---
+// --- FITUR BARU: ENDPOINT HAPUS USER TIM ---
+app.delete('/users/:username', (req, res) => {
+    const { token } = req.body;
+    const session = activeSessions[token];
+    
+    if (!session || session.role !== 'admin') {
+        return res.status(403).json({ status: 'error', message: 'Akses ditolak! Hanya Admin yang bisa menghapus user.' });
+    }
+
+    const usernameToDelete = req.params.username;
+
+    // Proteksi: Mencegah admin menghapus dirinya sendiri
+    if (usernameToDelete === session.username) {
+        return res.status(400).json({ status: 'error', message: 'Terjadi kesalahan! Anda tidak bisa menghapus akun Admin Anda sendiri.' });
+    }
+
+    const userIndex = dbUsers.findIndex(u => u.username === usernameToDelete);
+    if (userIndex === -1) {
+        return res.status(404).json({ status: 'error', message: 'User tidak ditemukan.' });
+    }
+
+    // Hapus dari database
+    dbUsers.splice(userIndex, 1);
+    saveDatabase(); // Simpan permanen ke volume Railway
+
+    res.json({ status: 'success', message: `Akun @${usernameToDelete} berhasil dihapus dari sistem.` });
+});
+
 app.post('/update-profile', (req, res) => {
     const { token, newUsername, newName, newPassword } = req.body;
     const session = activeSessions[token];
-    
     if (!session) return res.status(401).json({ status: 'error', message: 'Sesi tidak valid.' });
 
-    // Mencari index user yang sedang login di database
     const userIndex = dbUsers.findIndex(u => u.username === session.username);
     if (userIndex === -1) return res.status(404).json({ status: 'error', message: 'User tidak ditemukan.' });
 
-    // Validasi duplikasi username (jika username diubah)
     if (newUsername !== session.username && dbUsers.find(u => u.username === newUsername)) {
-        return res.status(400).json({ status: 'error', message: 'Username baru sudah digunakan oleh orang lain.' });
+        return res.status(400).json({ status: 'error', message: 'Username baru sudah digunakan.' });
     }
 
-    // Update data di database memori
     dbUsers[userIndex].username = newUsername;
     dbUsers[userIndex].name = newName;
-    if (newPassword && newPassword.trim() !== "") {
-        dbUsers[userIndex].password = newPassword;
-    }
+    if (newPassword && newPassword.trim() !== "") dbUsers[userIndex].password = newPassword;
 
-    // Sinkronisasi data sesi aktif saat ini
     activeSessions[token] = dbUsers[userIndex];
-    
-    saveDatabase(); // Simpan permanen ke volume Railway!
-    
-    res.json({ 
-        status: 'success', 
-        message: 'Profil berhasil diperbarui!', 
-        name: dbUsers[userIndex].name, 
-        username: dbUsers[userIndex].username 
-    });
+    saveDatabase();
+    res.json({ status: 'success', message: 'Profil diperbarui!', name: dbUsers[userIndex].name, username: dbUsers[userIndex].username });
 });
 
 // --- ENDPOINT UPLOAD & DOWNLOAD ---
@@ -195,9 +208,7 @@ app.put('/files/:id', async (req, res) => {
         if (fileIndex === -1) return res.status(404).json({ status: 'error', message: 'File tidak ditemukan.' });
 
         const file = dbFiles[fileIndex];
-        if (session.role !== 'admin' && session.name !== file.user) {
-            return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
-        }
+        if (session.role !== 'admin' && session.name !== file.user) return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
 
         try {
             const newCaption = `Proyek: ${project}\nKategori: ${category}\nOleh: ${file.user}\nKeterangan: ${keterangan || '-'}`;
@@ -208,7 +219,6 @@ app.put('/files/:id', async (req, res) => {
         dbFiles[fileIndex].category = category;
         dbFiles[fileIndex].keterangan = keterangan || '-';
         saveDatabase();
-
         res.json({ status: 'success', message: 'Data berhasil diupdate!' });
     } catch (error) { res.status(500).json({ status: 'error', message: 'Gagal update data.' }); }
 });
@@ -224,14 +234,11 @@ app.delete('/files/:id', async (req, res) => {
         if (fileIndex === -1) return res.status(404).json({ status: 'error', message: 'File tidak ditemukan.' });
 
         const file = dbFiles[fileIndex];
-        if (session.role !== 'admin' && session.name !== file.user) {
-            return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
-        }
+        if (session.role !== 'admin' && session.name !== file.user) return res.status(403).json({ status: 'error', message: 'Akses ditolak.' });
 
         await client.deleteMessages(CHANNEL_ID, [id], { revoke: true });
         dbFiles.splice(fileIndex, 1);
         saveDatabase();
-
         res.json({ status: 'success', message: 'File berhasil dihapus permanen.' });
     } catch (error) { res.status(500).json({ status: 'error', message: 'Gagal menghapus file.' }); }
 });
