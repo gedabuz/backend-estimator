@@ -34,7 +34,7 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 let dbFiles = []; 
 // UPDATE 1: USERNAME GEDABU DAN ROLE CREATOR
 let dbUsers = [
-    { username: 'gedabuz', password: 'akuplg88', role: 'creator', name: 'Rahmatullah (Creator)' }
+    { username: 'gedabuz', password: 'akuplg88', role: 'Admin', name: 'Rahmatullah (Admin)' }
 ];
 let activeSessions = {}; 
 
